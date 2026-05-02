@@ -14,9 +14,22 @@ class ProcessMonitor {
 
     struct TabInfo {
         let surfaceId: UUID
-        let isClaude: Bool
+        let kind: TabKind
         let name: String
         let projectPath: String
+
+        var isClaude: Bool { kind == .claude }
+
+        init(surfaceId: UUID, kind: TabKind, name: String, projectPath: String) {
+            self.surfaceId = surfaceId
+            self.kind = kind
+            self.name = name
+            self.projectPath = projectPath
+        }
+
+        init(surfaceId: UUID, isClaude: Bool, name: String, projectPath: String) {
+            self.init(surfaceId: surfaceId, kind: isClaude ? .claude : .terminal, name: name, projectPath: projectPath)
+        }
     }
 
     struct ActivityInfo: Equatable {
@@ -76,10 +89,27 @@ class ProcessMonitor {
         }
     }
 
+    /// Return the registered shell PID for a tab. Agent tabs use `exec`, so this
+    /// PID becomes the long-running agent process after startup.
+    func shellPid(forSurface surfaceId: UUID) -> pid_t? {
+        queue.sync {
+            if let cached = cachedPids[surfaceId] {
+                return cached.shell
+            }
+            guard let shellPid = registeredShellPids[surfaceId.uuidString] else {
+                return nil
+            }
+            if let info = getKInfoProc(pid: shellPid) {
+                cachedPids[surfaceId] = (login: info.kp_eproc.e_ppid, shell: shellPid)
+            }
+            return shellPid
+        }
+    }
+
     // MARK: - Core Poll (called on queue)
 
     private func _poll(tabs: [TabInfo]) -> [UUID: ActivityInfo] {
-        let terminalTabs = tabs.filter { !$0.isClaude }
+        let terminalTabs = tabs.filter { $0.kind == .terminal }
         guard !terminalTabs.isEmpty else { return [:] }
 
         // Resolve registered shell PIDs → (login, shell) pairs for uncached tabs.
@@ -100,7 +130,7 @@ class ProcessMonitor {
         if !hasLoggedMapping && cachedPids.count == tabs.count {
             hasLoggedMapping = true
             let lines = tabs.map { tab -> String in
-                let prefix = tab.isClaude ? "C" : "T"
+                let prefix = tab.kind.rawValue.prefix(1).uppercased()
                 let pid = cachedPids[tab.surfaceId].map { "login=\($0.login) shell=\($0.shell)" } ?? "?"
                 return "  \(prefix):\(tab.name)@\(tab.projectPath) → \(pid)"
             }

@@ -10,21 +10,12 @@ class SessionExplorerTimelineController: NSObject, NSTableViewDataSource, NSTabl
 
     private var currentSession: ExplorerSessionInfo?
     private var entries: [TimelineEntry] = []
-    private var summarizeSpinner: NSProgressIndicator?
+    private var forkAtPointEnabled = false
 
     // Callbacks
     var onResume: ((String) -> Void)?
     var onFork: ((String) -> Void)?
     var onForkAtPoint: ((String, Int) -> Void)?
-    var onSummarize: (() -> Void)?
-
-    private var summarizeBtn: NSButton?
-
-    private let relativeFormatter: RelativeDateTimeFormatter = {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .abbreviated
-        return f
-    }()
 
     private let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -56,9 +47,8 @@ class SessionExplorerTimelineController: NSObject, NSTableViewDataSource, NSTabl
     }
 
     struct TimelineOptions {
-        let cachedActionSummaries: [Int: String]
-        let summarizeEnabled: Bool
         let resumeEnabled: Bool
+        let forkAtPointEnabled: Bool
         let scrollToIndex: Int?
     }
 
@@ -67,16 +57,12 @@ class SessionExplorerTimelineController: NSObject, NSTableViewDataSource, NSTabl
     func showTimeline(session: ExplorerSessionInfo, entries: [TimelineEntry], options: TimelineOptions) {
         self.currentSession = session
         self.entries = entries
-
-        // Apply cached action summaries
-        for i in 0..<self.entries.count {
-            self.entries[i].actionSummary = options.cachedActionSummaries[self.entries[i].index]
-        }
+        self.forkAtPointEnabled = options.forkAtPointEnabled
 
         containerView.subviews.forEach { $0.removeFromSuperview() }
 
         // Header
-        let header = makeHeader(session: session, summarizeEnabled: options.summarizeEnabled, resumeEnabled: options.resumeEnabled)
+        let header = makeHeader(session: session, resumeEnabled: options.resumeEnabled)
         self.headerView = header
         header.translatesAutoresizingMaskIntoConstraints = false
         containerView.addSubview(header)
@@ -104,34 +90,9 @@ class SessionExplorerTimelineController: NSObject, NSTableViewDataSource, NSTabl
         }
     }
 
-    /// Transitions the button to a "generating" state: disabled, label changes, spinner appears.
-    func setSummarizing(_ active: Bool) {
-        guard let btn = summarizeBtn else { return }
-        btn.title = active ? "Summarizing..." : "Summarize with Haiku"
-        btn.isEnabled = !active
-
-        if active {
-            let spinner = NSProgressIndicator()
-            spinner.style = .spinning
-            spinner.controlSize = .small
-            spinner.translatesAutoresizingMaskIntoConstraints = false
-            spinner.startAnimation(nil)
-            btn.superview?.addSubview(spinner)
-            NSLayoutConstraint.activate([
-                spinner.leadingAnchor.constraint(equalTo: btn.trailingAnchor, constant: 6),
-                spinner.centerYAnchor.constraint(equalTo: btn.centerYAnchor),
-            ])
-            summarizeSpinner = spinner
-        } else {
-            summarizeSpinner?.removeFromSuperview()
-            summarizeSpinner = nil
-        }
-        tableView.reloadData()
-    }
-
     // MARK: - Header
 
-    private func makeHeader(session: ExplorerSessionInfo, summarizeEnabled: Bool, resumeEnabled: Bool) -> NSView {
+    private func makeHeader(session: ExplorerSessionInfo, resumeEnabled: Bool) -> NSView {
         let header = NSView()
         header.wantsLayer = true
         header.layer?.backgroundColor = NSColor(white: 0, alpha: 0.1).cgColor
@@ -179,49 +140,11 @@ class SessionExplorerTimelineController: NSObject, NSTableViewDataSource, NSTabl
 
             subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
             subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            subtitle.bottomAnchor.constraint(equalTo: header.bottomAnchor, constant: -12),
 
             buttonStack.topAnchor.constraint(equalTo: header.topAnchor, constant: 12),
             buttonStack.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -16),
         ])
-
-        // Track what the current bottom element is
-        var bottomAnchorView: NSView = subtitle
-
-        // Show existing summary if cached
-        if let summary = session.summary {
-            let field = NSTextField(labelWithString: summary)
-            field.font = .systemFont(ofSize: 12)
-            field.textColor = .secondaryLabelColor
-            field.lineBreakMode = .byTruncatingTail
-            field.maximumNumberOfLines = 5
-            field.cell?.wraps = true
-            field.cell?.isScrollable = false
-            field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            field.translatesAutoresizingMaskIntoConstraints = false
-            header.addSubview(field)
-
-            NSLayoutConstraint.activate([
-                field.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-                field.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -16),
-                field.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 4),
-            ])
-            bottomAnchorView = field
-        }
-
-        // Summarize button — always present, disabled when nothing to summarize
-        let btn = NSButton(title: "Summarize with Haiku", target: self, action: #selector(summarizeClicked))
-        btn.bezelStyle = .rounded
-        btn.controlSize = .small
-        btn.isEnabled = summarizeEnabled
-        btn.translatesAutoresizingMaskIntoConstraints = false
-        self.summarizeBtn = btn
-        header.addSubview(btn)
-
-        NSLayoutConstraint.activate([
-            btn.topAnchor.constraint(equalTo: bottomAnchorView.bottomAnchor, constant: 8),
-            btn.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-        ])
-        btn.bottomAnchor.constraint(equalTo: header.bottomAnchor, constant: -12).isActive = true
 
         return header
     }
@@ -234,10 +157,6 @@ class SessionExplorerTimelineController: NSObject, NSTableViewDataSource, NSTabl
     @objc private func forkClicked() {
         guard let session = currentSession else { return }
         onFork?(session.sessionId)
-    }
-
-    @objc private func summarizeClicked() {
-        onSummarize?()
     }
 
     // MARK: - Empty State
@@ -318,48 +237,36 @@ class SessionExplorerTimelineController: NSObject, NSTableViewDataSource, NSTabl
         metaField.translatesAutoresizingMaskIntoConstraints = false
         cell.addSubview(metaField)
 
-        // Action summary (what Claude did in response)
-        let actionField: NSTextField?
-        if let summary = entry.actionSummary, !summary.isEmpty {
-            let field = NSTextField(labelWithString: "\u{2192} \(summary)")
-            field.font = .systemFont(ofSize: 11)
-            field.textColor = .secondaryLabelColor
-            field.lineBreakMode = .byTruncatingTail
-            field.maximumNumberOfLines = 5
-            field.cell?.wraps = true
-            field.cell?.isScrollable = false
-            field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            field.translatesAutoresizingMaskIntoConstraints = false
-            cell.addSubview(field)
-            actionField = field
-        } else {
-            actionField = nil
-        }
-
         // Fork here button (icon rotated 180° so arrows point down)
-        let forkBtn = NSButton(title: "", target: nil, action: nil)
-        if let branchImage = NSImage(systemSymbolName: "arrow.branch", accessibilityDescription: "Fork here") {
-            let size = branchImage.size
-            let rotated = NSImage(size: size, flipped: false) { _ in
-                let ctx = NSGraphicsContext.current!.cgContext
-                ctx.translateBy(x: size.width / 2, y: size.height / 2)
-                ctx.rotate(by: .pi)
-                ctx.translateBy(x: -size.width / 2, y: -size.height / 2)
-                branchImage.draw(in: NSRect(origin: .zero, size: size))
-                return true
+        let forkBtn: NSButton?
+        if forkAtPointEnabled {
+            let btn = NSButton(title: "", target: nil, action: nil)
+            if let branchImage = NSImage(systemSymbolName: "arrow.branch", accessibilityDescription: "Fork here") {
+                let size = branchImage.size
+                let rotated = NSImage(size: size, flipped: false) { _ in
+                    let ctx = NSGraphicsContext.current!.cgContext
+                    ctx.translateBy(x: size.width / 2, y: size.height / 2)
+                    ctx.rotate(by: .pi)
+                    ctx.translateBy(x: -size.width / 2, y: -size.height / 2)
+                    branchImage.draw(in: NSRect(origin: .zero, size: size))
+                    return true
+                }
+                rotated.isTemplate = true
+                btn.image = rotated
             }
-            rotated.isTemplate = true
-            forkBtn.image = rotated
+            btn.bezelStyle = .inline
+            btn.isBordered = false
+            btn.toolTip = "Fork here"
+            btn.contentTintColor = NSColor(red: 0.4, green: 0.6, blue: 0.9, alpha: 0.8)
+            btn.tag = entry.index
+            btn.target = self
+            btn.action = #selector(forkHereClicked(_:))
+            btn.translatesAutoresizingMaskIntoConstraints = false
+            cell.addSubview(btn)
+            forkBtn = btn
+        } else {
+            forkBtn = nil
         }
-        forkBtn.bezelStyle = .inline
-        forkBtn.isBordered = false
-        forkBtn.toolTip = "Fork here"
-        forkBtn.contentTintColor = NSColor(red: 0.4, green: 0.6, blue: 0.9, alpha: 0.8)
-        forkBtn.tag = entry.index
-        forkBtn.target = self
-        forkBtn.action = #selector(forkHereClicked(_:))
-        forkBtn.translatesAutoresizingMaskIntoConstraints = false
-        cell.addSubview(forkBtn)
 
         NSLayoutConstraint.activate([
             // Vertical line
@@ -382,21 +289,15 @@ class SessionExplorerTimelineController: NSObject, NSTableViewDataSource, NSTabl
             // Meta
             metaField.leadingAnchor.constraint(equalTo: msgField.leadingAnchor),
             metaField.topAnchor.constraint(equalTo: msgField.bottomAnchor, constant: 2),
+            metaField.bottomAnchor.constraint(equalTo: cell.bottomAnchor, constant: -8),
 
-            // Fork here
-            forkBtn.leadingAnchor.constraint(equalTo: metaField.trailingAnchor, constant: 8),
-            forkBtn.centerYAnchor.constraint(equalTo: metaField.centerYAnchor),
         ])
 
-        if let actionField {
+        if let forkBtn {
             NSLayoutConstraint.activate([
-                actionField.leadingAnchor.constraint(equalTo: msgField.leadingAnchor),
-                actionField.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -16),
-                actionField.topAnchor.constraint(equalTo: metaField.bottomAnchor, constant: 1),
-                actionField.bottomAnchor.constraint(equalTo: cell.bottomAnchor, constant: -8),
+                forkBtn.leadingAnchor.constraint(equalTo: metaField.trailingAnchor, constant: 8),
+                forkBtn.centerYAnchor.constraint(equalTo: metaField.centerYAnchor),
             ])
-        } else {
-            metaField.bottomAnchor.constraint(equalTo: cell.bottomAnchor, constant: -8).isActive = true
         }
 
         return cell

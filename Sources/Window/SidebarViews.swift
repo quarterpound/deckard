@@ -127,15 +127,12 @@ class VerticalTabRowView: NSView, NSTextFieldDelegate, NSDraggingSource {
     }
 
     static func addPulseAnimation(to view: NSView) {
+        if let badgeView = view as? BadgeShapeView {
+            badgeView.setPulseAnimationEnabled(true)
+            return
+        }
         guard let layer = view.layer else { return }
-        let anim = CABasicAnimation(keyPath: "opacity")
-        anim.fromValue = 1.0
-        anim.toValue = 0.3
-        anim.duration = 1.2
-        anim.autoreverses = true
-        anim.repeatCount = .infinity
-        anim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        layer.add(anim, forKey: "pulse")
+        layer.add(BadgeShapeView.makePulseAnimation(), forKey: BadgeShapeView.pulseAnimationKey)
     }
 
     static func tooltipForBadge(_ state: TabItem.BadgeState, activity: ProcessMonitor.ActivityInfo? = nil) -> String {
@@ -146,6 +143,10 @@ class VerticalTabRowView: NSView, NSTextFieldDelegate, NSDraggingSource {
         case .waitingForInput: return "Waiting for input"
         case .needsPermission: return "Needs permission"
         case .error: return "Error"
+        case .codexIdle: return "Codex idle"
+        case .codexThinking: return "Codex working..."
+        case .codexError: return "Codex error"
+        case .codexCompletedUnseen: return "Codex done (unvisited)"
         case .terminalIdle: return "Idle"
         case .terminalActive: return activity?.description ?? "Running"
         case .terminalError: return "Error"
@@ -160,6 +161,10 @@ class VerticalTabRowView: NSView, NSTextFieldDelegate, NSDraggingSource {
         .waitingForInput: NSColor(red: 0.65, green: 0.4, blue: 0.9, alpha: 1.0),
         .needsPermission: .systemOrange,
         .error: .systemRed,
+        .codexIdle: NSColor(red: 0.26, green: 0.58, blue: 0.42, alpha: 1.0),
+        .codexThinking: NSColor(red: 0.18, green: 0.76, blue: 0.48, alpha: 1.0),
+        .codexError: .systemRed,
+        .codexCompletedUnseen: NSColor(red: 0.10, green: 0.84, blue: 0.66, alpha: 1.0),
         .terminalIdle: NSColor(red: 0.35, green: 0.55, blue: 0.54, alpha: 1.0),
         .terminalActive: NSColor(red: 0.45, green: 0.72, blue: 0.71, alpha: 1.0),
         .terminalError: NSColor(red: 0.85, green: 0.3, blue: 0.3, alpha: 1.0),
@@ -809,23 +814,26 @@ class ReorderableStackView: NSStackView {
 
 // MARK: - AddTabButton
 
-/// + button: left-click adds Claude tab, right-click adds terminal tab.
+/// + button: left-click adds Claude tab; modifiers/context menu expose other tab types.
 class AddTabButton: NSView {
     override var mouseDownCanMoveWindow: Bool { false }
-    private let leftClickAction: () -> Void
-    private let rightClickAction: () -> Void
+    private let claudeAction: () -> Void
+    private let codexAction: () -> Void
+    private let terminalAction: () -> Void
     private let label: NSTextField
 
-    init(leftClickAction: @escaping () -> Void, rightClickAction: @escaping () -> Void) {
-        self.leftClickAction = leftClickAction
-        self.rightClickAction = rightClickAction
+    init(claudeAction: @escaping () -> Void, codexAction: @escaping () -> Void, terminalAction: @escaping () -> Void) {
+        self.claudeAction = claudeAction
+        self.codexAction = codexAction
+        self.terminalAction = terminalAction
         label = NSTextField(labelWithString: "  +")
         label.font = .systemFont(ofSize: 12, weight: .medium)
         label.textColor = ThemeManager.shared.currentColors.secondaryText
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         toolTip = shortcutTooltip("New Claude tab", for: .newClaudeTab)
-            + "\nShift-click or right-click: " + shortcutTooltip("new Terminal", for: .newTerminalTab)
+            + "\nOption-click: " + shortcutTooltip("new Codex", for: .newCodexTab)
+            + "\nShift-click: " + shortcutTooltip("new Terminal", for: .newTerminalTab)
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
         NSLayoutConstraint.activate([
@@ -840,28 +848,56 @@ class AddTabButton: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     override func mouseDown(with event: NSEvent) {
-        if event.modifierFlags.contains(.shift) {
-            rightClickAction()  // Shift+click opens terminal tab
+        if event.modifierFlags.contains(.option) {
+            codexAction()
+        } else if event.modifierFlags.contains(.shift) {
+            terminalAction()
         } else {
-            leftClickAction()
+            claudeAction()
         }
     }
 
     override func rightMouseDown(with event: NSEvent) {
-        rightClickAction()
+        let menu = NSMenu()
+        let claudeItem = NSMenuItem(title: "New Claude Tab", action: #selector(newClaudeAction), keyEquivalent: "")
+        claudeItem.setShortcut(for: .newClaudeTab)
+        claudeItem.target = self
+        menu.addItem(claudeItem)
+
+        let codexItem = NSMenuItem(title: "New Codex Tab", action: #selector(newCodexAction), keyEquivalent: "")
+        codexItem.setShortcut(for: .newCodexTab)
+        codexItem.target = self
+        menu.addItem(codexItem)
+
+        let terminalItem = NSMenuItem(title: "New Terminal Tab", action: #selector(newTerminalAction), keyEquivalent: "")
+        terminalItem.setShortcut(for: .newTerminalTab)
+        terminalItem.target = self
+        menu.addItem(terminalItem)
+
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
+
+    @objc private func newClaudeAction() { claudeAction() }
+    @objc private func newCodexAction() { codexAction() }
+    @objc private func newTerminalAction() { terminalAction() }
 }
 
 // MARK: - BadgeShapeView
 
-/// Draws a badge dot using a CAShapeLayer for customizable shapes.
+/// Draws a badge dot using AppKit so the same pulse path works in both tab bars.
 class BadgeShapeView: NSView {
-    private let shapeLayer = CAShapeLayer()
+    static let pulseAnimationKey = "pulse"
+
+    private var shape: TabItem.BadgeShape
+    private var color: NSColor
+    private var isPulseAnimationEnabled = false
+    private var pulseTimer: Timer?
+    private var pulseStartTime: TimeInterval = 0
 
     init(shape: TabItem.BadgeShape, color: NSColor, size: CGFloat = 7) {
+        self.shape = shape
+        self.color = color
         super.init(frame: NSRect(x: 0, y: 0, width: size, height: size))
-        wantsLayer = true
-        layer?.addSublayer(shapeLayer)
         translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             widthAnchor.constraint(equalToConstant: size),
@@ -872,11 +908,89 @@ class BadgeShapeView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    override var isOpaque: Bool { false }
+
+    deinit {
+        pulseTimer?.invalidate()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil {
+            stopPulseAnimation(resetOpacity: false)
+        } else if isPulseAnimationEnabled {
+            startPulseAnimation()
+        }
+    }
+
+    func setPulseAnimationEnabled(_ enabled: Bool) {
+        isPulseAnimationEnabled = enabled
+        if enabled {
+            startPulseAnimation()
+        } else {
+            stopPulseAnimation(resetOpacity: true)
+        }
+    }
+
     func updateAppearance(shape: TabItem.BadgeShape, color: NSColor, size: CGFloat = 7) {
-        let rect = CGRect(x: 0, y: 0, width: size, height: size)
-        shapeLayer.path = Self.path(for: shape, in: rect)
-        shapeLayer.fillColor = color.cgColor
-        shapeLayer.frame = rect
+        self.shape = shape
+        self.color = color
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        context.saveGState()
+        context.addPath(Self.path(for: shape, in: bounds))
+        context.setFillColor(color.cgColor)
+        context.fillPath()
+        context.restoreGState()
+    }
+
+    private func startPulseAnimation() {
+        stopPulseAnimation(resetOpacity: false)
+        pulseStartTime = CACurrentMediaTime()
+        let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            self?.updatePulseOpacity()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        pulseTimer = timer
+        updatePulseOpacity()
+    }
+
+    private func stopPulseAnimation(resetOpacity: Bool) {
+        pulseTimer?.invalidate()
+        pulseTimer = nil
+        layer?.removeAnimation(forKey: Self.pulseAnimationKey)
+        if resetOpacity {
+            alphaValue = 1.0
+            needsDisplay = true
+        }
+    }
+
+    private func updatePulseOpacity() {
+        let halfCycle: TimeInterval = 1.2
+        let cycle = halfCycle * 2
+        let elapsed = CACurrentMediaTime() - pulseStartTime
+        let position = elapsed.truncatingRemainder(dividingBy: cycle)
+        let rawProgress = position <= halfCycle
+            ? position / halfCycle
+            : (cycle - position) / halfCycle
+        let eased = 0.5 - 0.5 * cos(rawProgress * .pi)
+        let opacity = Float(1.0 - (0.7 * eased))
+        alphaValue = CGFloat(opacity)
+        needsDisplay = true
+    }
+
+    static func makePulseAnimation() -> CABasicAnimation {
+        let anim = CABasicAnimation(keyPath: "opacity")
+        anim.fromValue = 1.0
+        anim.toValue = 0.3
+        anim.duration = 1.2
+        anim.autoreverses = true
+        anim.repeatCount = .infinity
+        anim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        return anim
     }
 
     static func path(for shape: TabItem.BadgeShape, in rect: CGRect) -> CGPath {

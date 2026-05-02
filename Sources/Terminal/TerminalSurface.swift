@@ -6,14 +6,77 @@ import SwiftTerm
 /// LocalProcessTerminalView subclass that accepts file drags from Finder
 /// and pastes shell-escaped paths into the terminal.
 private class DeckardTerminalView: LocalProcessTerminalView {
+    private enum ImagePasteShortcut {
+        /// Empty bracketed paste — Claude Code on macOS treats an empty paste
+        /// as a hint to read the system pasteboard for an image.
+        case emptyBracketedPaste
+        case controlV
+
+        var sequence: [UInt8] {
+            switch self {
+            case .emptyBracketedPaste:
+                return DeckardTerminalView.emptyBracketedPasteSequence
+            case .controlV:
+                return [0x16]
+            }
+        }
+    }
+
+    private static let emptyBracketedPasteSequence =
+        Array("\u{1B}[200~\u{1B}[201~".utf8)
+    private static let imagePasteboardTypes: [NSPasteboard.PasteboardType] = [
+        .png,
+        .tiff,
+        NSPasteboard.PasteboardType("public.image"),
+        NSPasteboard.PasteboardType("public.jpeg"),
+        NSPasteboard.PasteboardType("public.heic"),
+        NSPasteboard.PasteboardType("public.heif"),
+        NSPasteboard.PasteboardType("com.compuserve.gif"),
+        NSPasteboard.PasteboardType("org.webmproject.webp")
+    ]
+    private static let imageFileExtensions: Set<String> = [
+        "gif",
+        "heic",
+        "heif",
+        "jpeg",
+        "jpg",
+        "png",
+        "tif",
+        "tiff",
+        "webp"
+    ]
+    var handlesPasteShortcuts = true
+    private var imagePasteShortcut: ImagePasteShortcut = .emptyBracketedPaste
+    var stripsSynchronizedOutputSequences = false {
+        didSet {
+            if !stripsSynchronizedOutputSequences {
+                syncOutputFilterPendingBytes.removeAll(keepingCapacity: true)
+            }
+        }
+    }
+    private var pasteShortcutMonitor: Any?
+    private var syncOutputFilterPendingBytes: [UInt8] = []
+
+    func configureImagePasteShortcut(sessionType: String?) {
+        imagePasteShortcut = sessionType == "codex" ? .controlV : .emptyBracketedPaste
+    }
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         registerForDraggedTypes([.fileURL])
+        installPasteShortcutMonitor()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         registerForDraggedTypes([.fileURL])
+        installPasteShortcutMonitor()
+    }
+
+    deinit {
+        if let pasteShortcutMonitor {
+            NSEvent.removeMonitor(pasteShortcutMonitor)
+        }
     }
 
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
@@ -22,6 +85,22 @@ private class DeckardTerminalView: LocalProcessTerminalView {
             return .copy
         }
         return super.draggingEntered(sender)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if Self.isPasteShortcut(event) {
+            guard handlesPasteShortcuts else { return true }
+            paste(event)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    override func paste(_ sender: Any) {
+        if forwardImagePasteShortcutToTerminal() {
+            return
+        }
+        super.paste(sender)
     }
 
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
@@ -37,6 +116,73 @@ private class DeckardTerminalView: LocalProcessTerminalView {
         return true
     }
 
+    override func dataReceived(slice: ArraySlice<UInt8>) {
+        guard stripsSynchronizedOutputSequences else {
+            super.dataReceived(slice: slice)
+            return
+        }
+
+        let filtered = TerminalOutputFilter.stripSynchronizedOutputSequences(
+            from: slice,
+            pending: &syncOutputFilterPendingBytes)
+        guard !filtered.isEmpty else { return }
+        feed(byteArray: filtered[...])
+    }
+
+    private func installPasteShortcutMonitor() {
+        pasteShortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self,
+                  self.handlesPasteShortcuts,
+                  Self.isPasteShortcut(event),
+                  self.shouldHandlePasteShortcut(event) else {
+                return event
+            }
+
+            self.paste(event)
+            return nil
+        }
+    }
+
+    private func shouldHandlePasteShortcut(_ event: NSEvent) -> Bool {
+        guard event.window === window else { return false }
+        if hasFocus { return true }
+        guard let firstResponder = window?.firstResponder else { return false }
+        if firstResponder === self {
+            return true
+        }
+        guard let responderView = firstResponder as? NSView else {
+            return false
+        }
+        return responderView == self || responderView.isDescendant(of: self)
+    }
+
+    private func forwardImagePasteShortcutToTerminal() -> Bool {
+        guard Self.pasteboardContainsImage(NSPasteboard.general) else { return false }
+        send(imagePasteShortcut.sequence)
+        return true
+    }
+
+    private static func isPasteShortcut(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        return flags == .command && event.charactersIgnoringModifiers?.lowercased() == "v"
+    }
+
+    private static func pasteboardContainsImage(_ pasteboard: NSPasteboard) -> Bool {
+        if pasteboard.availableType(from: imagePasteboardTypes) != nil {
+            return true
+        }
+        if pasteboard.canReadObject(forClasses: [NSImage.self], options: nil) {
+            return true
+        }
+        guard let urls = pasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL] else {
+            return false
+        }
+        return urls.contains { imageFileExtensions.contains($0.pathExtension.lowercased()) }
+    }
+
     /// Escape a file path for safe pasting into a shell.
     private static func shellEscape(_ path: String) -> String {
         let special: Set<Character> = [" ", "'", "\"", "\\", "(", ")", "[", "]",
@@ -50,6 +196,56 @@ private class DeckardTerminalView: LocalProcessTerminalView {
             result.append(ch)
         }
         return result
+    }
+}
+
+enum TerminalOutputFilter {
+    private static let synchronizedOutputSequences = [
+        Array("\u{1B}[?2026h".utf8),
+        Array("\u{1B}[?2026l".utf8),
+    ]
+
+    static func stripSynchronizedOutputSequences(
+        from slice: ArraySlice<UInt8>,
+        pending: inout [UInt8]
+    ) -> [UInt8] {
+        guard !slice.isEmpty || !pending.isEmpty else { return [] }
+
+        var bytes = pending
+        bytes.append(contentsOf: slice)
+        pending.removeAll(keepingCapacity: true)
+
+        var output: [UInt8] = []
+        output.reserveCapacity(bytes.count)
+
+        var index = 0
+        while index < bytes.count {
+            if let sequence = synchronizedOutputSequences.first(where: { matches($0, in: bytes, at: index) }) {
+                index += sequence.count
+                continue
+            }
+
+            let remaining = bytes[index...]
+            if synchronizedOutputSequences.contains(where: { sequence in
+                remaining.count < sequence.count && sequence.starts(with: remaining)
+            }) {
+                pending = Array(remaining)
+                break
+            }
+
+            output.append(bytes[index])
+            index += 1
+        }
+
+        return output
+    }
+
+    private static func matches(_ sequence: [UInt8], in bytes: [UInt8], at index: Int) -> Bool {
+        guard bytes.count - index >= sequence.count else { return false }
+        for offset in 0..<sequence.count where bytes[index + offset] != sequence[offset] {
+            return false
+        }
+        return true
     }
 }
 
@@ -156,6 +352,13 @@ class TerminalSurface: NSObject, LocalProcessTerminalViewDelegate {
                     tmuxSession: String? = nil) {
         let shell = command ?? ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
 
+        // Codex emits DEC 2026 synchronized-output markers around frequent
+        // full-screen repaints. SwiftTerm snapshots the whole scrollback on
+        // every begin marker, which makes long-running Codex sessions sluggish.
+        let sessionType = envVars["DECKARD_SESSION_TYPE"]
+        terminalView.stripsSynchronizedOutputSequences = sessionType == "codex"
+        terminalView.configureImagePasteShortcut(sessionType: sessionType)
+
         // Build environment
         var env = ProcessInfo.processInfo.environment
         env["TERM"] = "xterm-256color"
@@ -240,6 +443,7 @@ class TerminalSurface: NSObject, LocalProcessTerminalViewDelegate {
         // the command (e.g. user typing while a new Claude tab is starting).
         if let initialInput {
             pendingInitialInput = initialInput
+            terminalView.handlesPasteShortcuts = false
             let view = terminalView
             keyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 // Swallow key events targeting our terminal view's window.
@@ -247,7 +451,9 @@ class TerminalSurface: NSObject, LocalProcessTerminalViewDelegate {
                 return event
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                guard let self, let input = self.pendingInitialInput else { return }
+                guard let self else { return }
+                defer { self.terminalView.handlesPasteShortcuts = true }
+                guard let input = self.pendingInitialInput else { return }
                 self.pendingInitialInput = nil
                 if let monitor = self.keyEventMonitor {
                     NSEvent.removeMonitor(monitor)
@@ -443,6 +649,7 @@ class TerminalSurface: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
+        guard self.title != title else { return }
         self.title = title
         NotificationCenter.default.post(
             name: .deckardSurfaceTitleChanged,
@@ -469,6 +676,7 @@ extension Notification.Name {
     static let deckardSurfaceTitleChanged = Notification.Name("deckardSurfaceTitleChanged")
     static let deckardSurfaceClosed = Notification.Name("deckardSurfaceClosed")
     static let deckardNewTab = Notification.Name("deckardNewTab")
+    static let deckardNewCodexTab = Notification.Name("deckardNewCodexTab")
     static let deckardCloseTab = Notification.Name("deckardCloseTab")
     static let deckardFontChanged = Notification.Name("deckardFontChanged")
     static let deckardScrollbackChanged = Notification.Name("deckardScrollbackChanged")
