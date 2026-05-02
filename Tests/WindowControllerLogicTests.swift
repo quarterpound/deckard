@@ -1,5 +1,6 @@
 import XCTest
 import AppKit
+import KeyboardShortcuts
 @testable import Deckard
 
 final class WindowControllerLogicTests: XCTestCase {
@@ -175,6 +176,38 @@ final class WindowControllerLogicTests: XCTestCase {
             XCTAssertFalse(SettingsWindowController.isBadgeAnimated(.codexError))
             XCTAssertFalse(SettingsWindowController.isBadgeAnimated(.codexCompletedUnseen))
         }
+    }
+
+    // MARK: - Shortcut policy
+
+    func testShortcutPolicyRejectsReporterOptionArrowShortcuts() {
+        let previousTab = KeyboardShortcuts.Shortcut(.leftArrow, modifiers: .option)
+        let nextTab = KeyboardShortcuts.Shortcut(.rightArrow, modifiers: .option)
+
+        XCTAssertNotNil(DeckardShortcutPolicy.rejectionReason(for: previousTab))
+        XCTAssertNotNil(DeckardShortcutPolicy.rejectionReason(for: nextTab))
+    }
+
+    func testShortcutPolicyRejectsShiftOptionShortcuts() {
+        let shortcut = KeyboardShortcuts.Shortcut(.rightArrow, modifiers: [.shift, .option])
+
+        XCTAssertNotNil(DeckardShortcutPolicy.rejectionReason(for: shortcut))
+    }
+
+    func testShortcutPolicyRejectsCommandTabAppSwitcherShortcuts() {
+        let nextApp = KeyboardShortcuts.Shortcut(.tab, modifiers: .command)
+        let previousApp = KeyboardShortcuts.Shortcut(.tab, modifiers: [.command, .shift])
+
+        XCTAssertNotNil(DeckardShortcutPolicy.rejectionReason(for: nextApp))
+        XCTAssertNotNil(DeckardShortcutPolicy.rejectionReason(for: previousApp))
+    }
+
+    func testShortcutPolicyAllowsCommandOptionArrows() {
+        let nextTab = KeyboardShortcuts.Shortcut(.rightArrow, modifiers: [.command, .option])
+        let previousTab = KeyboardShortcuts.Shortcut(.leftArrow, modifiers: [.command, .option])
+
+        XCTAssertNil(DeckardShortcutPolicy.rejectionReason(for: nextTab))
+        XCTAssertNil(DeckardShortcutPolicy.rejectionReason(for: previousTab))
     }
 
     // MARK: - ActivityInfo from ProcessMonitor

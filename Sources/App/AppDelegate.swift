@@ -34,6 +34,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Set up the main menu.
         log.log("startup", "Setting up main menu...")
         setupMainMenu()
+        DeckardShortcutPolicy.disableGlobalHotKeys()
 
         // Listen for notifications.
         log.log("startup", "Registering notification observers...")

@@ -1090,7 +1090,7 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSTextFie
         for i in leftCount..<entries.count {
             let l = NSTextField(labelWithString: entries[i].label)
             l.alignment = .right
-            rightEntries.append(RightEntry(label: l, control: KeyboardShortcuts.RecorderCocoa(for: entries[i].name)))
+            rightEntries.append(RightEntry(label: l, control: makeShortcutRecorder(for: entries[i].name)))
         }
 
         // Lay out in two columns, pairing left entries with right entries
@@ -1102,7 +1102,7 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSTextFie
                 let l = NSTextField(labelWithString: entries[row].label)
                 l.alignment = .right
                 leftLabel = l
-                leftControl = KeyboardShortcuts.RecorderCocoa(for: entries[row].name)
+                leftControl = makeShortcutRecorder(for: entries[row].name)
             } else {
                 leftLabel = NSView()
                 leftControl = NSView()
@@ -1129,10 +1129,49 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSTextFie
         return pane
     }
 
+    private func makeShortcutRecorder(for name: KeyboardShortcuts.Name) -> KeyboardShortcuts.RecorderCocoa {
+        var lastAcceptedShortcut = KeyboardShortcuts.getShortcut(for: name)
+
+        return KeyboardShortcuts.RecorderCocoa(for: name) { [weak self] shortcut in
+            defer {
+                DeckardShortcutPolicy.disableGlobalHotKeys()
+            }
+
+            guard let shortcut else {
+                lastAcceptedShortcut = nil
+                return
+            }
+
+            if let message = DeckardShortcutPolicy.rejectionReason(for: shortcut) {
+                KeyboardShortcuts.setShortcut(lastAcceptedShortcut, for: name)
+                DispatchQueue.main.async { [weak self] in
+                    self?.showShortcutRejectedAlert(message)
+                }
+                return
+            }
+
+            lastAcceptedShortcut = shortcut
+        }
+    }
+
+    private func showShortcutRejectedAlert(_ message: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Shortcut Not Available"
+        alert.informativeText = message
+
+        if let window {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
+    }
+
     @objc private func resetShortcuts() {
         for entry in configurableShortcuts {
             KeyboardShortcuts.reset(entry.name)
         }
+        DeckardShortcutPolicy.disableGlobalHotKeys()
         UserDefaults.standard.removeObject(forKey: revealModifiersKey)
         // Rebuild the pane to reflect reset values
         switchToPane(.shortcuts)

@@ -1,3 +1,4 @@
+import AppKit
 import KeyboardShortcuts
 
 extension KeyboardShortcuts.Name {
@@ -65,3 +66,26 @@ let configurableShortcuts: [ShortcutEntry] = [
 let tabShortcutNames: [KeyboardShortcuts.Name] = [
     .tab1, .tab2, .tab3, .tab4, .tab5, .tab6, .tab7, .tab8, .tab9, .tab0,
 ]
+
+enum DeckardShortcutPolicy {
+    static func disableGlobalHotKeys() {
+        KeyboardShortcuts.disable(configurableShortcuts.map(\.name))
+    }
+
+    static func rejectionReason(for shortcut: KeyboardShortcuts.Shortcut) -> String? {
+        let modifiers = shortcut.modifiers.intersection([.command, .shift, .option, .control])
+
+        if shortcut.key == .tab,
+           modifiers.contains(.command),
+           modifiers.subtracting([.command, .shift]).isEmpty {
+            return "Command-Tab and Command-Shift-Tab are reserved by macOS for app switching. Use Command-Option-Left/Right or another combination."
+        }
+
+        if modifiers.contains(.option),
+           modifiers.subtracting([.option, .shift]).isEmpty {
+            return "Option-only shortcuts are reserved by macOS text input and can fail or interfere with typing. Add Command or Control."
+        }
+
+        return nil
+    }
+}
