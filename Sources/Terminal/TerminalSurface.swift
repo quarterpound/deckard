@@ -394,6 +394,10 @@ class TerminalSurface: NSObject, LocalProcessTerminalViewDelegate {
             // -u: force UTF-8 mode for proper emoji/wide character handling
             var args = ["-L", Self.tmuxSocket, "-u", "new-session", "-A", "-s", sessionName]
             if let cwd = workingDirectory { args += ["-c", cwd] }
+            // Run the initial pane's shell as a login shell so /etc/zprofile
+            // (path_helper) populates PATH. Without -l, the pane inherits the
+            // tmux server's frozen PATH from when the server first started.
+            args += [shell, "-l"]
 
             terminalView.startProcess(
                 executable: tmuxPath,
