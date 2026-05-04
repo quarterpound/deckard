@@ -31,6 +31,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ThemeManager.shared.applySavedTheme()
         log.log("startup", "Loaded \(ThemeManager.shared.availableThemes.count) themes, current: \(ThemeManager.shared.currentThemeName ?? "default")")
 
+        // Migrate any user shortcut overrides from old identifier names before
+        // anything reads from KeyboardShortcuts.
+        DeckardShortcutMigration.migrate()
+
         // Set up the main menu.
         log.log("startup", "Setting up main menu...")
         setupMainMenu()
@@ -72,7 +76,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if TerminalSurface.tmuxAvailable {
             let savedState = SessionManager.shared.load()
             let activeSessions = Set(
-                (savedState?.projects ?? []).flatMap(\.tabs).compactMap(\.tmuxSessionName)
+                (savedState?.workspaces ?? []).flatMap(\.tabs).compactMap(\.tmuxSessionName)
             )
             DispatchQueue.global(qos: .utility).async {
                 TerminalSurface.cleanupOrphanedTmuxSessions(activeSessions: activeSessions)
@@ -152,11 +156,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func handleNewTab() {
-        windowController?.addTabToCurrentProject(kind: .claude)
+        windowController?.addTabToCurrentWorkspace(kind: .claude)
     }
 
     @objc private func handleNewCodexTab() {
-        windowController?.addTabToCurrentProject(kind: .codex)
+        windowController?.addTabToCurrentWorkspace(kind: .codex)
     }
 
     @objc private func handleCloseTab() {
@@ -192,8 +196,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let fileMenuItem = NSMenuItem()
         let fileMenu = NSMenu(title: "File")
 
-        let openItem = NSMenuItem(title: "Open Folder...", action: #selector(openProject), keyEquivalent: "")
-        openItem.setShortcut(for: .openFolder)
+        let openItem = NSMenuItem(title: "Open Workspace...", action: #selector(openWorkspace), keyEquivalent: "")
+        openItem.setShortcut(for: .openWorkspace)
         fileMenu.addItem(openItem)
         fileMenu.addItem(.separator())
 
@@ -215,13 +219,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         closeItem.setShortcut(for: .closeTab)
         fileMenu.addItem(closeItem)
 
-        let newFolderItem = NSMenuItem(title: "New Sidebar Folder", action: #selector(createNewSidebarFolder), keyEquivalent: "")
-        newFolderItem.setShortcut(for: .newSidebarFolder)
-        newFolderItem.target = self
-        fileMenu.addItem(newFolderItem)
+        let newGroupItem = NSMenuItem(title: "New Group", action: #selector(createNewSidebarGroup), keyEquivalent: "")
+        newGroupItem.setShortcut(for: .newGroup)
+        newGroupItem.target = self
+        fileMenu.addItem(newGroupItem)
 
-        let moveOutItem = NSMenuItem(title: "Move Out of Folder", action: #selector(moveCurrentProjectOutOfFolder), keyEquivalent: "")
-        moveOutItem.setShortcut(for: .moveOutOfFolder)
+        let moveOutItem = NSMenuItem(title: "Move Out of Group", action: #selector(moveCurrentWorkspaceOutOfGroup), keyEquivalent: "")
+        moveOutItem.setShortcut(for: .moveOutOfGroup)
         moveOutItem.target = self
         fileMenu.addItem(moveOutItem)
 
@@ -229,9 +233,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         exploreSessionsItem.setShortcut(for: .exploreSessions)
         fileMenu.addItem(exploreSessionsItem)
 
-        let closeProjectItem = NSMenuItem(title: "Close Folder", action: #selector(closeCurrentProject), keyEquivalent: "")
-        closeProjectItem.setShortcut(for: .closeFolder)
-        fileMenu.addItem(closeProjectItem)
+        let closeWorkspaceItem = NSMenuItem(title: "Close Workspace", action: #selector(closeCurrentWorkspace), keyEquivalent: "")
+        closeWorkspaceItem.setShortcut(for: .closeWorkspace)
+        fileMenu.addItem(closeWorkspaceItem)
         fileMenu.addItem(.separator())
 
         let nextTabItem = NSMenuItem(title: "Next Tab", action: #selector(selectNextTab), keyEquivalent: "")
@@ -242,19 +246,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         prevTabItem.setShortcut(for: .previousTab)
         fileMenu.addItem(prevTabItem)
 
-        let nextProjectItem = NSMenuItem(title: "Next Project", action: #selector(selectNextProject), keyEquivalent: "")
-        nextProjectItem.setShortcut(for: .nextProject)
-        fileMenu.addItem(nextProjectItem)
+        let nextWorkspaceItem = NSMenuItem(title: "Next Workspace", action: #selector(selectNextWorkspace), keyEquivalent: "")
+        nextWorkspaceItem.setShortcut(for: .nextWorkspace)
+        fileMenu.addItem(nextWorkspaceItem)
 
-        let prevProjectItem = NSMenuItem(title: "Previous Project", action: #selector(selectPrevProject), keyEquivalent: "")
-        prevProjectItem.setShortcut(for: .previousProject)
-        fileMenu.addItem(prevProjectItem)
+        let prevWorkspaceItem = NSMenuItem(title: "Previous Workspace", action: #selector(selectPrevWorkspace), keyEquivalent: "")
+        prevWorkspaceItem.setShortcut(for: .previousWorkspace)
+        fileMenu.addItem(prevWorkspaceItem)
         fileMenu.addItem(.separator())
 
-        // Cmd+1-9, Cmd+0 for direct project access
+        // Cmd+1-9, Cmd+0 for direct workspace access
         for i in 0..<tabShortcutNames.count {
             let displayNum = i + 1
-            let item = NSMenuItem(title: "Project \(displayNum)", action: #selector(selectTabByNumber(_:)), keyEquivalent: "")
+            let item = NSMenuItem(title: "Workspace \(displayNum)", action: #selector(selectTabByNumber(_:)), keyEquivalent: "")
             item.tag = i
             item.setShortcut(for: tabShortcutNames[i])
             fileMenu.addItem(item)
@@ -296,29 +300,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Actions
 
-    private let projectPicker = ProjectPicker()
+    private let workspacePicker = WorkspacePicker()
 
-    func openProjectPicker() {
-        openProject()
+    func openWorkspacePicker() {
+        openWorkspace()
     }
 
-    @objc private func openProject() {
-        projectPicker.show(relativeTo: windowController?.window) { [weak self] path in
+    @objc private func openWorkspace() {
+        workspacePicker.show(relativeTo: windowController?.window) { [weak self] path in
             guard let path = path else { return }
-            self?.windowController?.openProject(path: path)
+            self?.windowController?.openWorkspace(path: path)
         }
     }
 
     @objc private func newClaudeTab() {
-        windowController?.addTabToCurrentProject(kind: .claude)
+        windowController?.addTabToCurrentWorkspace(kind: .claude)
     }
 
     @objc private func newCodexTab() {
-        windowController?.addTabToCurrentProject(kind: .codex)
+        windowController?.addTabToCurrentWorkspace(kind: .codex)
     }
 
     @objc private func newTerminalTab() {
-        windowController?.addTabToCurrentProject(kind: .terminal)
+        windowController?.addTabToCurrentWorkspace(kind: .terminal)
     }
 
     @objc private func closeCurrentTab() {
@@ -331,20 +335,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func exploreSessions() {
-        windowController?.exploreCurrentProjectSessions()
+        windowController?.exploreCurrentWorkspaceSessions()
     }
 
-    @objc private func moveCurrentProjectOutOfFolder() {
-        windowController?.moveCurrentProjectOutOfFolder()
+    @objc private func moveCurrentWorkspaceOutOfGroup() {
+        windowController?.moveCurrentWorkspaceOutOfGroup()
     }
 
-    @objc private func closeCurrentProject() {
+    @objc private func closeCurrentWorkspace() {
         if let keyWindow = NSApp.keyWindow,
            keyWindow != windowController?.window {
             keyWindow.performClose(nil)
             return
         }
-        windowController?.closeCurrentProject()
+        windowController?.closeCurrentWorkspace()
     }
 
     @objc private func selectNextTab() {
@@ -355,20 +359,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         windowController?.selectPrevTab()
     }
 
-    @objc private func selectNextProject() {
-        windowController?.selectNextProject()
+    @objc private func selectNextWorkspace() {
+        windowController?.selectNextWorkspace()
     }
 
-    @objc private func selectPrevProject() {
-        windowController?.selectPrevProject()
+    @objc private func selectPrevWorkspace() {
+        windowController?.selectPrevWorkspace()
     }
 
     @objc private func selectTabByNumber(_ sender: NSMenuItem) {
-        windowController?.selectProject(byNumber: sender.tag)
+        windowController?.selectWorkspace(byNumber: sender.tag)
     }
 
-    @objc private func createNewSidebarFolder() {
-        windowController?.createSidebarFolder()
+    @objc private func createNewSidebarGroup() {
+        windowController?.createSidebarGroup()
     }
 
     @objc private func toggleSidebar() {

@@ -9,7 +9,7 @@ class VerticalTabRowView: NSView, NSTextFieldDelegate, NSDraggingSource {
     var isSelected: Bool = false {
         didSet { needsDisplay = true }
     }
-    /// Badge info for each Claude tab in this project, shown as right-aligned dots.
+    /// Badge info for each Claude tab in this workspace, shown as right-aligned dots.
     var badgeInfos: [(state: TabItem.BadgeState, name: String, activity: ProcessMonitor.ActivityInfo?)] = [] {
         didSet { updateBadgeDots() }
     }
@@ -26,7 +26,7 @@ class VerticalTabRowView: NSView, NSTextFieldDelegate, NSDraggingSource {
     private var dragStartPoint: NSPoint?
     private var leadingConstraint: NSLayoutConstraint?
 
-    /// Leading indent (used for projects inside folders).
+    /// Leading indent (used for workspaces inside groups).
     var indent: CGFloat = 0 {
         didSet { leadingConstraint?.constant = 8 + indent }
     }
@@ -72,7 +72,7 @@ class VerticalTabRowView: NSView, NSTextFieldDelegate, NSDraggingSource {
         wantsLayer = true
 
         label.translatesAutoresizingMaskIntoConstraints = false
-        label.toolTip = shortcutTooltip("Close Folder", for: .closeFolder)
+        label.toolTip = shortcutTooltip("Close Workspace", for: .closeWorkspace)
         badgeContainer.translatesAutoresizingMaskIntoConstraints = false
         shortcutOverlay.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
@@ -215,7 +215,7 @@ class VerticalTabRowView: NSView, NSTextFieldDelegate, NSDraggingSource {
         dragStartPoint = nil
 
         let pb = NSPasteboardItem()
-        pb.setString("\(index)", forType: deckardProjectDragType)
+        pb.setString("\(index)", forType: deckardWorkspaceDragType)
         let item = NSDraggingItem(pasteboardWriter: pb)
         item.setDraggingFrame(bounds, contents: snapshot())
         beginDraggingSession(with: [item], event: event, source: self)
@@ -236,7 +236,7 @@ class VerticalTabRowView: NSView, NSTextFieldDelegate, NSDraggingSource {
         return image
     }
 
-    /// True while the project name text field is being edited.
+    /// True while the workspace name text field is being edited.
     var isEditingName: Bool { label.isEditable }
 
     private func startEditing() {
@@ -283,50 +283,50 @@ class VerticalTabRowView: NSView, NSTextFieldDelegate, NSDraggingSource {
     }
 }
 
-// MARK: - SidebarFolderView
+// MARK: - SidebarGroupView
 
-/// A folder header row in the sidebar with disclosure triangle and name.
-class SidebarFolderView: NSView, NSTextFieldDelegate, NSDraggingSource {
-    let folder: SidebarFolder
+/// A group header row in the sidebar with disclosure triangle and name.
+class SidebarGroupView: NSView, NSTextFieldDelegate, NSDraggingSource {
+    let group: SidebarGroup
     private let disclosureImageView: NSImageView
     private let label: NSTextField
     private let badgeContainer: NSStackView
 
-    var onToggle: ((SidebarFolderView) -> Void)?
+    var onToggle: ((SidebarGroupView) -> Void)?
     var onRename: ((String) -> Void)?
     var onContextMenu: ((NSEvent) -> NSMenu?)?
-    var onDrop: ((SidebarFolderView, Int) -> Void)?  // folder, project index
+    var onDrop: ((SidebarGroupView, Int) -> Void)?  // group, workspace index
 
     /// Row index in the sidebar stack view (set during rebuildSidebar).
     var rowIndex: Int = 0
     private var dragStartPoint: NSPoint?
     private var didDrag = false
 
-    /// Highlight when a dragged item hovers over this folder.
+    /// Highlight when a dragged item hovers over this group.
     var isDropTarget: Bool = false {
         didSet { needsDisplay = true }
     }
 
-    /// Badge info aggregated from all projects in the folder.
+    /// Badge info aggregated from all workspaces in the group.
     var badgeInfos: [(state: TabItem.BadgeState, name: String, activity: ProcessMonitor.ActivityInfo?)] = [] {
         didSet { updateBadgeDots() }
     }
 
-    /// True when the folder is collapsed and contains the selected project.
+    /// True when the group is collapsed and contains the selected workspace.
     var isContainingSelected: Bool = false {
         didSet { needsDisplay = true }
     }
 
-    init(folder: SidebarFolder, projectCount: Int) {
-        self.folder = folder
+    init(group: SidebarGroup, workspaceCount: Int) {
+        self.group = group
 
         disclosureImageView = NSImageView()
-        disclosureImageView.image = NSImage(systemSymbolName: folder.isCollapsed ? "chevron.right" : "chevron.down",
-                                            accessibilityDescription: "Toggle folder")
+        disclosureImageView.image = NSImage(systemSymbolName: group.isCollapsed ? "chevron.right" : "chevron.down",
+                                            accessibilityDescription: "Toggle group")
         disclosureImageView.contentTintColor = ThemeManager.shared.currentColors.secondaryText
         disclosureImageView.imageAlignment = .alignCenter
 
-        label = NSTextField(labelWithString: folder.name)
+        label = NSTextField(labelWithString: group.name)
         label.font = .systemFont(ofSize: 11, weight: .semibold)
         label.textColor = ThemeManager.shared.currentColors.secondaryText
         label.lineBreakMode = .byTruncatingTail
@@ -368,7 +368,7 @@ class SidebarFolderView: NSView, NSTextFieldDelegate, NSDraggingSource {
     required init?(coder: NSCoder) { fatalError() }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        // While editing the folder name, let the field editor handle events normally.
+        // While editing the group name, let the field editor handle events normally.
         // Otherwise, always route clicks to self so subviews (image, label) don't swallow them.
         if isEditingName { return super.hitTest(point) }
         return frame.contains(point) ? self : nil
@@ -385,8 +385,8 @@ class SidebarFolderView: NSView, NSTextFieldDelegate, NSDraggingSource {
     }
 
     func updateChevron() {
-        disclosureImageView.image = NSImage(systemSymbolName: folder.isCollapsed ? "chevron.right" : "chevron.down",
-                                            accessibilityDescription: "Toggle folder")
+        disclosureImageView.image = NSImage(systemSymbolName: group.isCollapsed ? "chevron.right" : "chevron.down",
+                                            accessibilityDescription: "Toggle group")
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -422,7 +422,7 @@ class SidebarFolderView: NSView, NSTextFieldDelegate, NSDraggingSource {
         dragStartPoint = nil
 
         let pb = NSPasteboardItem()
-        pb.setString("\(rowIndex)", forType: deckardFolderDragType)
+        pb.setString("\(rowIndex)", forType: deckardGroupDragType)
         let item = NSDraggingItem(pasteboardWriter: pb)
         item.setDraggingFrame(bounds, contents: snapshot())
         beginDraggingSession(with: [item], event: event, source: self)
@@ -448,7 +448,7 @@ class SidebarFolderView: NSView, NSTextFieldDelegate, NSDraggingSource {
         }
     }
 
-    /// True while the folder name text field is being edited.
+    /// True while the group name text field is being edited.
     var isEditingName: Bool { label.isEditable }
 
     func startEditing() {
@@ -464,11 +464,11 @@ class SidebarFolderView: NSView, NSTextFieldDelegate, NSDraggingSource {
         label.isEditable = false
         label.isSelectable = false
         let newName = label.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !newName.isEmpty, newName != folder.name {
-            folder.name = newName
+        if !newName.isEmpty, newName != group.name {
+            group.name = newName
             onRename?(newName)
         } else {
-            label.stringValue = folder.name
+            label.stringValue = group.name
         }
     }
 
@@ -483,7 +483,7 @@ class SidebarFolderView: NSView, NSTextFieldDelegate, NSDraggingSource {
             return true
         }
         if sel == #selector(cancelOperation(_:)) {
-            label.stringValue = folder.name
+            label.stringValue = group.name
             label.isEditable = false
             window?.makeFirstResponder(nil)
             return true
@@ -497,8 +497,8 @@ class SidebarFolderView: NSView, NSTextFieldDelegate, NSDraggingSource {
             $0.removeFromSuperview()
         }
         // When collapsed, show aggregated badges; when expanded, hide them
-        // (individual project rows show their own badges)
-        guard folder.isCollapsed else { return }
+        // (individual workspace rows show their own badges)
+        guard group.isCollapsed else { return }
         for info in badgeInfos where info.state != .none {
             let dot = BadgeShapeView(
                 shape: VerticalTabRowView.shapeForBadge(info.state),
@@ -515,10 +515,10 @@ class SidebarFolderView: NSView, NSTextFieldDelegate, NSDraggingSource {
 
 // MARK: - SidebarDropZone
 
-/// Covers the empty area below the project list; dropping here moves to end.
+/// Covers the empty area below the workspace list; dropping here moves to end.
 class SidebarDropZone: NSView {
     var onDrop: ((Int) -> Void)?
-    var onFolderDrop: ((Int) -> Void)?  // folder row index dropped to bottom
+    var onGroupDrop: ((Int) -> Void)?  // group row index dropped to bottom
     var onContextMenu: ((NSEvent) -> NSMenu?)?
     weak var sidebarStackView: ReorderableStackView?
 
@@ -530,7 +530,7 @@ class SidebarDropZone: NSView {
 
     private func acceptsDrag(_ sender: NSDraggingInfo) -> Bool {
         let types = sender.draggingPasteboard.types ?? []
-        return types.contains(deckardProjectDragType) || types.contains(deckardFolderDragType)
+        return types.contains(deckardWorkspaceDragType) || types.contains(deckardGroupDragType)
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -555,14 +555,14 @@ class SidebarDropZone: NSView {
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         sidebarStackView?.hideIndicator()
-        if let fromStr = sender.draggingPasteboard.string(forType: deckardProjectDragType),
+        if let fromStr = sender.draggingPasteboard.string(forType: deckardWorkspaceDragType),
            let fromIndex = Int(fromStr) {
             onDrop?(fromIndex)
             return true
         }
-        if let fromStr = sender.draggingPasteboard.string(forType: deckardFolderDragType),
+        if let fromStr = sender.draggingPasteboard.string(forType: deckardGroupDragType),
            let fromRow = Int(fromStr) {
-            onFolderDrop?(fromRow)
+            onGroupDrop?(fromRow)
             return true
         }
         return false
@@ -572,11 +572,11 @@ class SidebarDropZone: NSView {
 // MARK: - ReorderableStackView
 
 /// NSStackView subclass that accepts drops for reordering.
-/// Supports project drag (reorder/drop onto folder) and folder drag (reorder folders).
+/// Supports workspace drag (reorder/drop onto group) and group drag (reorder groups).
 class ReorderableStackView: NSStackView {
     var onReorder: ((Int, Int, Bool) -> Void)?
-    var onDropOntoFolder: ((SidebarFolderView, Int) -> Void)?
-    var onFolderReorder: ((Int, Int) -> Void)?
+    var onDropOntoGroup: ((SidebarGroupView, Int) -> Void)?
+    var onGroupReorder: ((Int, Int) -> Void)?
 
     private let dropIndicator: NSView = {
         let v = NSView()
@@ -587,7 +587,7 @@ class ReorderableStackView: NSStackView {
     }()
     private var currentDropIndex: Int = -1
     private var currentDropForceFullWidth: Bool = false
-    private weak var highlightedFolder: SidebarFolderView?
+    private weak var highlightedGroup: SidebarGroupView?
 
     private func dropIndex(for sender: NSDraggingInfo) -> Int {
         let location = convert(sender.draggingLocation, from: nil)
@@ -599,14 +599,14 @@ class ReorderableStackView: NSStackView {
         return arrangedSubviews.count
     }
 
-    /// Returns the SidebarFolderView at the drag location, if the cursor is
-    /// within the center region of a folder row. The top and bottom edges
+    /// Returns the SidebarGroupView at the drag location, if the cursor is
+    /// within the center region of a group row. The top and bottom edges
     /// (6px each) are reserved for between-item line indicator drops.
-    private func folderView(at sender: NSDraggingInfo) -> SidebarFolderView? {
+    private func groupView(at sender: NSDraggingInfo) -> SidebarGroupView? {
         let location = convert(sender.draggingLocation, from: nil)
         let edgeInset: CGFloat = 6
         for view in arrangedSubviews {
-            guard let fv = view as? SidebarFolderView else { continue }
+            guard let fv = view as? SidebarGroupView else { continue }
             let innerTop = fv.frame.maxY - edgeInset
             let innerBottom = fv.frame.minY + edgeInset
             if location.y <= innerTop && location.y >= innerBottom {
@@ -616,10 +616,10 @@ class ReorderableStackView: NSStackView {
         return nil
     }
 
-    private func clearFolderHighlight() {
-        if let prev = highlightedFolder {
+    private func clearGroupHighlight() {
+        if let prev = highlightedGroup {
             prev.isDropTarget = false
-            highlightedFolder = nil
+            highlightedGroup = nil
         }
     }
 
@@ -644,7 +644,7 @@ class ReorderableStackView: NSStackView {
             yPos = bounds.maxY - 1
         }
 
-        // Indent the indicator when between items inside a folder (project drags only)
+        // Indent the indicator when between items inside a group (workspace drags only)
         let leftInset: CGFloat
         if forceFullWidth {
             leftInset = 8
@@ -668,45 +668,45 @@ class ReorderableStackView: NSStackView {
         dropIndicator.isHidden = true
         currentDropIndex = -1
         currentDropForceFullWidth = false
-        clearFolderHighlight()
+        clearGroupHighlight()
     }
 
-    private func acceptsProjectDrag(_ sender: NSDraggingInfo) -> Bool {
-        sender.draggingPasteboard.types?.contains(deckardProjectDragType) == true
+    private func acceptsWorkspaceDrag(_ sender: NSDraggingInfo) -> Bool {
+        sender.draggingPasteboard.types?.contains(deckardWorkspaceDragType) == true
     }
 
-    private func acceptsFolderDrag(_ sender: NSDraggingInfo) -> Bool {
-        sender.draggingPasteboard.types?.contains(deckardFolderDragType) == true
+    private func acceptsGroupDrag(_ sender: NSDraggingInfo) -> Bool {
+        sender.draggingPasteboard.types?.contains(deckardGroupDragType) == true
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        if acceptsProjectDrag(sender) {
-            return updateProjectDrag(sender)
-        } else if acceptsFolderDrag(sender) {
-            return updateFolderDrag(sender)
+        if acceptsWorkspaceDrag(sender) {
+            return updateWorkspaceDrag(sender)
+        } else if acceptsGroupDrag(sender) {
+            return updateGroupDrag(sender)
         }
         return []
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        if acceptsProjectDrag(sender) {
-            return updateProjectDrag(sender)
-        } else if acceptsFolderDrag(sender) {
-            return updateFolderDrag(sender)
+        if acceptsWorkspaceDrag(sender) {
+            return updateWorkspaceDrag(sender)
+        } else if acceptsGroupDrag(sender) {
+            return updateGroupDrag(sender)
         }
         return []
     }
 
-    /// Folder drag: only show indicator between top-level items (not inside folders).
-    private func updateFolderDrag(_ sender: NSDraggingInfo) -> NSDragOperation {
+    /// Group drag: only show indicator between top-level items (not inside groups).
+    private func updateGroupDrag(_ sender: NSDraggingInfo) -> NSDragOperation {
         let snapped = snapToTopLevel(for: sender)
         showIndicator(at: snapped, forceFullWidth: true)
         return .move
     }
 
     /// Snap drop position to the nearest top-level boundary.
-    /// Indented rows (inside folders) are skipped — the indicator jumps to
-    /// the folder header above or the next top-level item below.
+    /// Indented rows (inside groups) are skipped — the indicator jumps to
+    /// the group header above or the next top-level item below.
     private func snapToTopLevel(for sender: NSDraggingInfo) -> Int {
         let raw = dropIndex(for: sender)
         // If dropping at a top-level position, use it directly
@@ -722,10 +722,10 @@ class ReorderableStackView: NSStackView {
             let isIndented = (view as? VerticalTabRowView)?.indent ?? 0 > 0
             if !isIndented {
                 // Snap to just after this top-level item's group
-                // (after the folder + all its children)
+                // (after the group + all its children)
                 best = i
-                // Find end of this folder's children
-                if view is SidebarFolderView {
+                // Find end of this group's children
+                if view is SidebarGroupView {
                     var end = i + 1
                     while end < arrangedSubviews.count,
                           let r = arrangedSubviews[end] as? VerticalTabRowView, r.indent > 0 {
@@ -739,24 +739,24 @@ class ReorderableStackView: NSStackView {
         return best
     }
 
-    /// Common logic for project drag: highlight folder or show line indicator.
-    private func updateProjectDrag(_ sender: NSDraggingInfo) -> NSDragOperation {
-        if let fv = folderView(at: sender) {
-            // Hovering over a folder row — highlight it, hide the line indicator
+    /// Common logic for workspace drag: highlight group or show line indicator.
+    private func updateWorkspaceDrag(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if let fv = groupView(at: sender) {
+            // Hovering over a group row — highlight it, hide the line indicator
             dropIndicator.isHidden = true
             currentDropIndex = -1
-            if highlightedFolder !== fv {
-                clearFolderHighlight()
+            if highlightedGroup !== fv {
+                clearGroupHighlight()
                 fv.isDropTarget = true
-                highlightedFolder = fv
+                highlightedGroup = fv
             }
         } else {
-            // Not over a folder — show the line indicator
-            clearFolderHighlight()
+            // Not over a group — show the line indicator
+            clearGroupHighlight()
             let idx = dropIndex(for: sender)
-            // At the boundary between the last child of an expanded folder
+            // At the boundary between the last child of an expanded group
             // and the next non-indented row, use cursor Y to disambiguate:
-            // upper half (folder child territory) → indented indicator,
+            // upper half (group child territory) → indented indicator,
             // lower half (top-level territory) → full-width indicator.
             var forceFullWidth = false
             if idx > 0, idx < arrangedSubviews.count {
@@ -781,16 +781,16 @@ class ReorderableStackView: NSStackView {
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        let wasOnFolder = highlightedFolder
+        let wasOnGroup = highlightedGroup
         let wasForceFullWidth = currentDropForceFullWidth
         hideIndicator()
 
-        // Handle project drag
-        if let fromStr = sender.draggingPasteboard.string(forType: deckardProjectDragType),
+        // Handle workspace drag
+        if let fromStr = sender.draggingPasteboard.string(forType: deckardWorkspaceDragType),
            let fromIndex = Int(fromStr) {
-            // If dropped on a highlighted folder, route to folder drop handler
-            if let fv = wasOnFolder {
-                onDropOntoFolder?(fv, fromIndex)
+            // If dropped on a highlighted group, route to group drop handler
+            if let fv = wasOnGroup {
+                onDropOntoGroup?(fv, fromIndex)
                 return true
             }
             let toIndex = dropIndex(for: sender)
@@ -798,12 +798,12 @@ class ReorderableStackView: NSStackView {
             return true
         }
 
-        // Handle folder drag
-        if let fromStr = sender.draggingPasteboard.string(forType: deckardFolderDragType),
+        // Handle group drag
+        if let fromStr = sender.draggingPasteboard.string(forType: deckardGroupDragType),
            let fromRow = Int(fromStr) {
             let toRow = dropIndex(for: sender)
             if toRow != fromRow {
-                onFolderReorder?(fromRow, toRow)
+                onGroupReorder?(fromRow, toRow)
             }
             return true
         }
