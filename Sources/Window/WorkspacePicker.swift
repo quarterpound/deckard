@@ -323,7 +323,7 @@ class WorkspacePicker: NSObject, NSTableViewDataSource, NSTableViewDelegate, NST
         // Escape single quotes in the query to prevent Spotlight query injection.
         let escaped = query.replacingOccurrences(of: "'", with: "\\'")
         process.arguments = [
-            "kMDItemContentType == public.group && kMDItemFSName == '*\(escaped)*'cd"
+            "kMDItemContentType == public.folder && kMDItemFSName == '*\(escaped)*'cd"
         ]
 
         let pipe = Pipe()
