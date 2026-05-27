@@ -54,7 +54,7 @@ private class DeckardTerminalView: LocalProcessTerminalView {
             }
         }
     }
-    private var pasteShortcutMonitor: Any?
+    private var inputShortcutMonitor: Any?
     private var syncOutputFilterPendingBytes: [UInt8] = []
 
     func configureImagePasteShortcut(sessionType: String?) {
@@ -64,18 +64,18 @@ private class DeckardTerminalView: LocalProcessTerminalView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         registerForDraggedTypes([.fileURL])
-        installPasteShortcutMonitor()
+        installInputShortcutMonitor()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         registerForDraggedTypes([.fileURL])
-        installPasteShortcutMonitor()
+        installInputShortcutMonitor()
     }
 
     deinit {
-        if let pasteShortcutMonitor {
-            NSEvent.removeMonitor(pasteShortcutMonitor)
+        if let inputShortcutMonitor {
+            NSEvent.removeMonitor(inputShortcutMonitor)
         }
     }
 
@@ -129,21 +129,28 @@ private class DeckardTerminalView: LocalProcessTerminalView {
         feed(byteArray: filtered[...])
     }
 
-    private func installPasteShortcutMonitor() {
-        pasteShortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self,
-                  self.handlesPasteShortcuts,
-                  Self.isPasteShortcut(event),
-                  self.shouldHandlePasteShortcut(event) else {
+    private func installInputShortcutMonitor() {
+        inputShortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, self.shouldHandleInputShortcut(event) else {
                 return event
             }
-
-            self.paste(event)
-            return nil
+            if Self.isPasteShortcut(event), self.handlesPasteShortcuts {
+                self.paste(event)
+                return nil
+            }
+            if Self.isKillLineShortcut(event) {
+                self.send([0x15])
+                return nil
+            }
+            if Self.isDeleteWordShortcut(event) {
+                self.send([0x1B, 0x7F])
+                return nil
+            }
+            return event
         }
     }
 
-    private func shouldHandlePasteShortcut(_ event: NSEvent) -> Bool {
+    private func shouldHandleInputShortcut(_ event: NSEvent) -> Bool {
         guard event.window === window else { return false }
         if hasFocus { return true }
         guard let firstResponder = window?.firstResponder else { return false }
@@ -165,6 +172,16 @@ private class DeckardTerminalView: LocalProcessTerminalView {
     private static func isPasteShortcut(_ event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
         return flags == .command && event.charactersIgnoringModifiers?.lowercased() == "v"
+    }
+
+    private static func isKillLineShortcut(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        return flags == .command && event.charactersIgnoringModifiers == "\u{7F}"
+    }
+
+    private static func isDeleteWordShortcut(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        return flags == .option && event.charactersIgnoringModifiers == "\u{7F}"
     }
 
     private static func pasteboardContainsImage(_ pasteboard: NSPasteboard) -> Bool {
