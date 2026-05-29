@@ -131,10 +131,10 @@ private class DeckardTerminalView: LocalProcessTerminalView {
 
     private func installInputShortcutMonitor() {
         inputShortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, self.shouldHandleInputShortcut(event) else {
+            guard let self, self.handlesPasteShortcuts, self.shouldHandleInputShortcut(event) else {
                 return event
             }
-            if Self.isPasteShortcut(event), self.handlesPasteShortcuts {
+            if Self.isPasteShortcut(event) {
                 self.paste(event)
                 return nil
             }
