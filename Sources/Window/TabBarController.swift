@@ -153,7 +153,6 @@ extension DeckardWindowController {
         workspace.tabs.remove(at: idx)
 
         if workspace.tabs.isEmpty {
-            currentTerminalView = nil
             showEmptyState()
             rebuildTabBar()
             rebuildSidebar()

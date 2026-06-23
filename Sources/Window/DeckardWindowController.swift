@@ -679,16 +679,13 @@ class DeckardWindowController: NSWindowController, NSSplitViewDelegate {
 
         if workspaces.isEmpty {
             selectedWorkspaceIndex = -1
-            currentTerminalView?.removeFromSuperview()
-            currentTerminalView = nil
             rebuildTabBar()
+            showEmptyState()
         } else if let next = nextVisibleWorkspaceIndex(near: index) {
             selectWorkspace(at: next, autoExpandGroup: false)
         } else {
             // All remaining workspaces are inside collapsed groups — show empty state.
             selectedWorkspaceIndex = -1
-            currentTerminalView?.removeFromSuperview()
-            currentTerminalView = nil
             rebuildTabBar()
             rebuildSidebar()
             showEmptyState()
@@ -728,7 +725,6 @@ class DeckardWindowController: NSWindowController, NSSplitViewDelegate {
         rebuildTabBar()
 
         if workspace.tabs.isEmpty {
-            currentTerminalView = nil
             showEmptyState()
         } else {
             // Always clamp for safe array access, even during restore
@@ -1065,7 +1061,6 @@ class DeckardWindowController: NSWindowController, NSSplitViewDelegate {
 
         if workspace.tabs.isEmpty {
             // Keep the workspace in the sidebar with just the "+" button
-            currentTerminalView = nil
             showEmptyState()
             rebuildTabBar()
             rebuildSidebar()
@@ -1176,6 +1171,7 @@ class DeckardWindowController: NSWindowController, NSSplitViewDelegate {
     /// Show the empty-state overlay (workspace has no tabs).
     func showEmptyState() {
         currentTerminalView?.removeFromSuperview()
+        currentTerminalView = nil
         emptyStateView?.isHidden = false
         contextTimer?.invalidate()
         contextTimer = nil
@@ -1482,10 +1478,9 @@ class DeckardWindowController: NSWindowController, NSSplitViewDelegate {
                 workspace.tabs.remove(at: ti)
 
                 if workspace.tabs.isEmpty && pi == selectedWorkspaceIndex {
-                    currentTerminalView?.removeFromSuperview()
-                    currentTerminalView = nil
                     rebuildTabBar()
                     rebuildSidebar()
+                    showEmptyState()
                 } else if workspace.tabs.isEmpty {
                     rebuildSidebar()
                 } else if pi == selectedWorkspaceIndex {
